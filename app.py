@@ -121,30 +121,56 @@ def generate_grid_pdf(uploaded_files):
     output_buffer.seek(0)
     return output_buffer
 
-# --- Streamlit UI ---
-st.set_page_config(page_title="ID Maker with Scissors", layout="centered")
+# --- Streamlit UI (Branding Area) ---
 
-st.title("🪪 ID Card Maker with Cut Marks ✂️")
-st.markdown("""
-**Layout Features:**
-- ✂️ **Visible Scissors:** Scissor icons added at corners.
-- ⬛ **Dark Cut Lines:** Thicker, darker dotted lines for easy cutting.
-- ⬆️ **Print Safe:** Shifted up to avoid printer cutting issues.
-- 💎 **600 DPI:** Ultra high quality.
-""")
+# Page Setup
+st.set_page_config(page_title="राष्ट्रीय मध्यान्ह भोजन रसोइया फ्रन्ट", page_icon="🪪", layout="centered")
+
+# --- SIDEBAR (Aapka Naam aur Contact) ---
+with st.sidebar:
+    # Koshish karein logo dikhane ki, agar file nahi mili to error nahi aayega
+    try:
+        st.image("logo.png", width=150)
+    except:
+        st.write("📂 Upload logo.png to see logo here")
+        
+    st.title("राष्ट्रीय मध्यान्ह भोजन रसोइया फ्रन्ट") # Yahan Apna Naam Likhein
+    st.info("""
+    **Address:** 14/17 sec-50 Faridabad
+    **Mobile:** 9026479519
+    **Email:** rasoiyafront3@gmail.com
+
+    """)
+    st.markdown("---")
+    st.caption("Developed for professional use Ashish Singh.")
+
+# --- MAIN HEADER (Logo + Title) ---
+col1, col2 = st.columns([6, 4]) # Logo chhota, Naam bada
+
+with col1:
+    try:
+        st.image("logo.png", width=80)
+    except:
+        st.write("🖼️") # Agar logo nahi hai to icon dikhega
+
+with col2:
+    st.title("ID Card Grid Maker") # Tool ka naam
+    st.write("Professional Print Tool with Cutting Marks ✂️")
+
+# --- FILE UPLOADER SECTION (Baaki same rahega) ---
 
 uploaded_files = st.file_uploader("Upload ID Card PDFs", type=["pdf"], accept_multiple_files=True)
 
 if uploaded_files:
     if st.button("Generate PDF with Scissors ✂️"):
-        with st.spinner("Processing High Quality Images..."):
+        with st.spinner("Processing... Please wait"):
             try:
                 pdf_output = generate_grid_pdf(uploaded_files)
-                st.success("✅ PDF Generated! Check the marks.")
+                st.success("✅ PDF Generated! Ready to Print.")
                 st.download_button(
-                    label="📥 Download PDF (Dark Cut Lines)",
+                    label="📥 Download Final PDF",
                     data=pdf_output,
-                    file_name="id_cards_with_scissors.pdf",
+                    file_name="processed_id_cards.pdf",
                     mime="application/pdf"
                 )
             except Exception as e:
