@@ -2,36 +2,46 @@ import streamlit as st
 import fitz  # PyMuPDF
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.pdfgen import canvas
-from reportlab.lib.units import cm
-from reportlab.lib.colors import black, lightgrey, grey
+from reportlab.lib.units import inch, mm
+from reportlab.lib.colors import black, grey
 import io
 
-def generate_grid_pdf(uploaded_files, dpi_scale, left_margin_val, row_gap_val):
+# --- Constants for ID Card (CR80 Standard) ---
+# Card Dimensions in Inches
+CARD_WIDTH_INCH = 3.375  # 85.6mm (Landscape width)
+CARD_HEIGHT_INCH = 2.125 # 53.98mm (Landscape height)
+
+# On the paper, since we need to fit 5 in a row, we must rotate them to Portrait slots
+# So the SLOT on paper will be:
+SLOT_WIDTH = CARD_HEIGHT_INCH * inch  # 2.125 inches on paper width
+SLOT_HEIGHT = CARD_WIDTH_INCH * inch  # 3.375 inches on paper height
+
+def generate_grid_pdf(uploaded_files, dpi_scale, gap_val, draw_cut_lines):
     # --- Configuration ---
-    # Card Size
-    CARD_WIDTH = 5.5 * cm
-    CARD_HEIGHT = 8.5 * cm
-    
-    # Gap settings
-    COL_GAP = 0.0 * cm  # Horizontal gap 0 hi rahega
-    ROW_GAP = row_gap_val * cm # Vertical gap user decide karega
-    
-    # --- LANDSCAPE LAYOUT: 5x2 (Total 10 cards) ---
+    # LANDSCAPE LAYOUT: 5 Columns x 2 Rows
     COLS = 5
     ROWS = 2
     CARDS_PER_PAGE = COLS * ROWS # 10 cards
     
-    # Grid Total Dimensions Calculation
-    total_grid_width = (COLS * CARD_WIDTH) + ((COLS - 1) * COL_GAP)
-    total_grid_height = (ROWS * CARD_HEIGHT) + ((ROWS - 1) * ROW_GAP)
+    # Gap settings (Converted to points)
+    GAP = gap_val * mm 
     
-    # --- POSITION LOGIC ---
-    start_x = left_margin_val * cm
-    start_y = (21.0 * cm - total_grid_height) / 2
+    # --- Auto-Calculate Centering ---
+    # Total grid dimensions
+    total_grid_width = (COLS * SLOT_WIDTH) + ((COLS - 1) * GAP)
+    total_grid_height = (ROWS * SLOT_HEIGHT) + ((ROWS - 1) * GAP)
     
-    # Output PDF setup with LANDSCAPE orientation
+    # A4 Landscape Dimensions
+    page_width, page_height = landscape(A4)
+    
+    # Starting X and Y to perfectly center the grid
+    start_x = (page_width - total_grid_width) / 2
+    start_y = (page_height - total_grid_height) / 2
+    
+    # Output PDF setup
     output_buffer = io.BytesIO()
     c = canvas.Canvas(output_buffer, pagesize=landscape(A4))
+    c.setTitle("ID Card Grid - 5x2")
     
     card_count = 0
     col = 0
@@ -42,8 +52,8 @@ def generate_grid_pdf(uploaded_files, dpi_scale, left_margin_val, row_gap_val):
         file_bytes = uploaded_file.read()
         filename = uploaded_file.name.lower()
         
-        # --- NEW: File Type Detection (PDF or Image) ---
         try:
+            # Handle PDF vs Images
             if filename.endswith(".pdf"):
                 doc = fitz.open(stream=file_bytes, filetype="pdf")
             elif filename.endswith((".jpg", ".jpeg")):
@@ -51,55 +61,76 @@ def generate_grid_pdf(uploaded_files, dpi_scale, left_margin_val, row_gap_val):
             elif filename.endswith(".png"):
                 doc = fitz.open(stream=file_bytes, filetype="png")
             else:
-                # Agar koi aur file aa jaye to skip karein
                 st.warning(f"Skipping unsupported file: {uploaded_file.name}")
                 continue
         except Exception as e:
             st.error(f"Error reading {uploaded_file.name}: {e}")
             continue
         
-        # Ab chahe PDF ho ya Image, PyMuPDF usse "doc" ki tarah hi treat karega
         for page_num in range(len(doc)):
-            # Safety Limit
-            if card_count >= 200:
+            # Safety Limit for memory
+            if card_count >= 150:
                 break
                 
             page = doc.load_page(page_num)
             
-            # --- DYNAMIC DPI LOGIC ---
-            mat = fitz.Matrix(dpi_scale, dpi_scale) 
-            pix = page.get_pixmap(matrix=mat)
+            # --- INTELLIGENT ROTATION & DPI LOGIC ---
+            # We want high quality, so we assume 300-600 DPI.
+            # 72 points = 1 inch. To get 300 DPI, we need scale factor ~4.16
+            
+            # Check orientation of source image
+            rect = page.rect
+            is_source_landscape = rect.width > rect.height
+            
+            # Matrix logic:
+            # We need the final image to fit into a Portrait Slot (2.125 W x 3.375 H)
+            # If source is Landscape (Standard ID), we must rotate it 90 degrees.
+            
+            if is_source_landscape:
+                # Rotate 90 degrees clockwise to make it stand up
+                mat = fitz.Matrix(0, 1, -1, 0)
+            else:
+                # If already portrait, just scale
+                mat = fitz.Matrix(1, 1) # Identity
+            
+            # Apply DPI Scaling on top of rotation
+            scale_matrix = fitz.Matrix(dpi_scale, dpi_scale)
+            final_matrix = mat * scale_matrix
+            
+            pix = page.get_pixmap(matrix=final_matrix, alpha=False)
             img_data = pix.tobytes("png")
             
             # Position Calculation
-            x_pos = start_x + (col * (CARD_WIDTH + COL_GAP))
-            y_pos = start_y + (row * (CARD_HEIGHT + ROW_GAP))
+            x_pos = start_x + (col * (SLOT_WIDTH + GAP))
+            y_pos = start_y + (row * (SLOT_HEIGHT + GAP))
             
             # --- Draw ID Card Image ---
             from reportlab.lib.utils import ImageReader
             img = ImageReader(io.BytesIO(img_data))
-            # Image ko force-resize karke 5.5x8.5 cm box me fit karenge
-            c.drawImage(img, x_pos, y_pos, width=CARD_WIDTH, height=CARD_HEIGHT)
             
-            # --- Single Line Cutting Grid (Dashed) ---
-            c.setStrokeColor(grey) 
-            c.setLineWidth(1)
-            c.setDash(4, 4)
-            c.rect(x_pos, y_pos, CARD_WIDTH, CARD_HEIGHT)
-            c.setDash(1, 0) # Reset to solid
+            # Draw the image into the calculated slot
+            c.drawImage(img, x_pos, y_pos, width=SLOT_WIDTH, height=SLOT_HEIGHT)
             
-            # --- Scissor Icons (✂️) ---
-            try:
-                c.setFont("ZapfDingbats", 8) 
-                c.setFillColor(black)
-                scissor_char = chr(34) 
+            # --- Cutting Guides (Optional) ---
+            if draw_cut_lines:
+                c.setStrokeColor(grey)
+                c.setLineWidth(0.5)
+                c.setDash(3, 3) # Dashed line
+                c.rect(x_pos, y_pos, SLOT_WIDTH, SLOT_HEIGHT)
+                c.setDash(1, 0) # Reset
                 
-                # Scissors
-                c.drawString(x_pos - 4, y_pos + CARD_HEIGHT - 4, scissor_char)
-                if col == COLS - 1:
-                     c.drawString(x_pos + CARD_WIDTH + 1, y_pos - 2, scissor_char)
-            except:
-                pass 
+                # Crop Marks (Corner L shapes) - Better for professional cutting
+                c.setStrokeColor(black)
+                c.setLineWidth(1)
+                len_mark = 5
+                
+                # Bottom Left
+                c.line(x_pos - 2, y_pos, x_pos - 2 - len_mark, y_pos) # Horz
+                c.line(x_pos, y_pos - 2, x_pos, y_pos - 2 - len_mark) # Vert
+                
+                # Top Right
+                c.line(x_pos + SLOT_WIDTH + 2, y_pos + SLOT_HEIGHT, x_pos + SLOT_WIDTH + 2 + len_mark, y_pos + SLOT_HEIGHT)
+                c.line(x_pos + SLOT_WIDTH, y_pos + SLOT_HEIGHT + 2, x_pos + SLOT_WIDTH, y_pos + SLOT_HEIGHT + 2 + len_mark)
 
             # Grid Update Logic
             card_count += 1
@@ -115,8 +146,8 @@ def generate_grid_pdf(uploaded_files, dpi_scale, left_margin_val, row_gap_val):
                 row = ROWS - 1 
         
         doc.close()
-        if card_count >= 200:
-            st.warning("⚠️ 200 ID Cards limit reached.")
+        if card_count >= 150:
+            st.warning("⚠️ 150 ID Cards limit reached for this batch.")
             break
 
     c.save()
@@ -125,111 +156,72 @@ def generate_grid_pdf(uploaded_files, dpi_scale, left_margin_val, row_gap_val):
 
 # --- Streamlit UI ---
 
-# Page Setup
-st.set_page_config(page_title="राष्ट्रीय मध्यान्ह भोजन रसोइया फ्रन्ट", page_icon="🪪", layout="wide")
+st.set_page_config(page_title="ID Card Print Master", page_icon="🖨️", layout="wide")
 
-# --- SIDEBAR ---
+st.title("🖨️ Pro ID Card Organizer (5x2 Grid)")
+st.markdown(
+    """
+    <style>
+    .reportview-container { background: #f0f2f6; }
+    </style>
+    **Features:** Exact 3.375" x 2.125" Size | Auto-Centering | High DPI | Smart Rotation
+    """, unsafe_allow_html=True
+)
+
 with st.sidebar:
-    try:
-        st.image("logo.png", width=150)
-    except:
-        st.info("📂 Upload logo.png to see logo here")
-        
-    st.title("Admin Panel") 
-    st.markdown("### Contact Details")
-    st.info("""
-    **Address:** 14/17 sec-50 Faridabad  
+    st.header("⚙️ Settings")
     
-    **Mobile:** 9026479519  
+    st.info("The layout is **5 columns x 2 rows**. To fit 5 cards on A4 width, cards are automatically rotated 90°.")
     
-    **Email:** rasoiyafront3@gmail.com
-    """)
+    # Gap Adjustment
+    gap_val = st.slider("Cutting Gap (mm)", 0.0, 5.0, 1.0, 0.5)
+    
+    # Cutting Lines
+    draw_cut_lines = st.checkbox("Draw Cutting Borders/Marks", value=True)
+    
+    # DPI Settings
+    quality = st.select_slider(
+        "Print Quality", 
+        options=["Draft", "High (300 DPI)", "Ultra (600 DPI)"], 
+        value="High (300 DPI)"
+    )
+    
+    if "Ultra" in quality:
+        dpi_scale = 8.0 # Very High Res
+    elif "High" in quality:
+        dpi_scale = 4.16 # ~300 DPI
+    else:
+        dpi_scale = 2.0 
+
     st.markdown("---")
-    
-    # --- Margin & Gap Adjustment ---
-    st.markdown("### 📏 Adjustments")
-    
-    st.write("**1. Left Margin (Horizontal):**")
-    left_margin_val = st.slider(
-        "Move Grid Left/Right (cm)", 
-        min_value=0.0, 
-        max_value=2.2, 
-        value=0.6, 
-        step=0.1
-    )
-    
-    st.write("**2. Row Gap (Vertical):**")
-    row_gap_val = st.slider(
-        "Gap between Rows (cm)", 
-        min_value=0.0, 
-        max_value=2.0, 
-        value=0.5, 
-        step=0.1
-    )
-    
-    st.markdown("---")
-    st.caption("Developed by Ashish Singh.")
+    st.caption("Designed for perfect edge-to-edge printing.")
 
-# --- MAIN HEADER ---
-col1, col2 = st.columns([1, 6]) 
-
-with col1:
-    try:
-        st.image("logo.png", width=100)
-    except:
-        st.write("🖼️") 
-
-with col2:
-    st.title("राष्ट्रीय मध्यान्ह भोजन रसोइया फ्रन्ट") 
-    st.subheader("ID Card Grid Maker (PDF + Images)")
-    st.write("Support: PDF, JPG, PNG | Adjustable Settings | 10 Cards per Page")
-
-# --- SETTINGS SECTION (DPI CONTROL) ---
-st.markdown("---")
-st.write("### ⚙️ Printing Settings")
-
-col_dpi, col_info = st.columns([3, 2])
-
-with col_dpi:
-    dpi_choice = st.radio(
-        "Select Print Quality (Resolution):",
-        ["Fast (150 DPI)", "Standard (300 DPI)", "Ultra HD (600 DPI)"],
-        index=1,
-        horizontal=True
-    )
-
-if "150" in dpi_choice:
-    dpi_scale = 2.0
-elif "300" in dpi_choice:
-    dpi_scale = 4.0
-else:
-    dpi_scale = 8.0 
-
-# --- FILE UPLOADER SECTION ---
-# Added 'jpg', 'jpeg', 'png' to the allowed types
+# --- File Upload ---
 uploaded_files = st.file_uploader(
-    "Upload ID Cards (PDF, JPG, PNG)", 
+    "Upload ID Cards (PDF, JPG, PNG) - Max 150", 
     type=["pdf", "jpg", "jpeg", "png"], 
     accept_multiple_files=True
 )
 
 if uploaded_files:
     num_files = len(uploaded_files)
-    st.success(f"📂 {num_files} files selected.")
+    st.success(f"📂 {num_files} files loaded.")
     
-    if st.button(f"Generate PDF ({dpi_choice}) ✂️"):
-        with st.spinner(f"Processing..."):
+    if st.button("🚀 Generate Print-Ready PDF"):
+        with st.spinner("Processing High-Quality PDF..."):
             try:
-                pdf_output = generate_grid_pdf(uploaded_files, dpi_scale, left_margin_val, row_gap_val)
+                pdf_data = generate_grid_pdf(uploaded_files, dpi_scale, gap_val, draw_cut_lines)
                 
-                st.balloons() 
-                st.success(f"✅ PDF Generated! (Row Gap: {row_gap_val} cm)")
+                st.balloons()
                 
                 st.download_button(
-                    label="📥 Download Final PDF",
-                    data=pdf_output,
-                    file_name=f"id_cards_images_supported.pdf",
+                    label="📥 Download PDF (A4 Landscape)",
+                    data=pdf_data,
+                    file_name="id_cards_5x2_print_ready.pdf",
                     mime="application/pdf"
                 )
+                
+                st.success("✅ Done! Cards have been rotated to fit 10 per page.")
+                
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"An error occurred: {e}")
