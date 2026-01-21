@@ -35,8 +35,8 @@ def generate_grid_pdf(uploaded_files, dpi_scale, gap_val, draw_cut_lines):
     page_width, page_height = landscape(A4)
     
     # Starting X and Y to perfectly center the grid
-    start_x = (page_width - total_grid_width) / 0.2
-    start_y = (page_height - total_grid_height) / 2
+    start_x = (page_width - total_grid_width) / 2
+    start_y = (page_height - total_grid_height) / 0.2
     
     # Output PDF setup
     output_buffer = io.BytesIO()
@@ -225,5 +225,6 @@ if uploaded_files:
                 
             except Exception as e:
                 st.error(f"An error occurred: {e}")
+
 
 
